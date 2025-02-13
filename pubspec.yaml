@@ -26,6 +26,8 @@ dependencies:
   firebase_auth: ^5.4.2
   googleapis: ^13.2.0  # 最新バージョンを確認してね
   googleapis_auth: 
+  logger: ^2.0.2
+  
 
 dev_dependencies:
   flutter_test:

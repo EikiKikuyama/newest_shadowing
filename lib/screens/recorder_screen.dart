@@ -1,6 +1,6 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:newest_shadowing_app/services/audio_recorder_service.dart';
-import 'package:logger/logger.dart'; // ✅ ロガーを追加
+import '../services/audio_recorder_service.dart';
 
 class RecorderScreen extends StatefulWidget {
   const RecorderScreen({super.key});
@@ -10,37 +10,41 @@ class RecorderScreen extends StatefulWidget {
 }
 
 class RecorderScreenState extends State<RecorderScreen> {
-  final AudioRecorderService _recorderService = AudioRecorderService();
-  final Logger _logger = Logger(); // ✅ Logger を作成
-  bool _isRecording = false;
+  late AudioRecorderService _recorderService;
+  late StreamSubscription<double> _amplitudeSubscription;
+  final List<double> _amplitudeHistory = List.filled(50, 0.0);
 
-  Future<void> _toggleRecording() async {
-    _logger.d("ボタンが押された！ 現在の録音状態: $_isRecording");
+  @override
+  void initState() {
+    super.initState();
+    _recorderService = AudioRecorderService();
 
-    if (_isRecording) {
-      await _recorderService.stopRecording();
-      _logger.i("録音を停止しました");
-    } else {
-      await _recorderService.startRecording();
-      _logger.i("録音を開始しました");
-    }
-
-    setState(() {
-      _isRecording = !_isRecording;
+    // `getAmplitudeStream()` を `amplitudeStream` に修正
+    _amplitudeSubscription =
+        _recorderService.amplitudeStream.listen((amplitude) {
+      if (mounted) {
+        setState(() {
+          _amplitudeHistory.removeAt(0);
+          _amplitudeHistory.add(amplitude);
+        });
+      }
     });
+  }
 
-    _logger.d("状態更新後の録音状態: $_isRecording");
+  @override
+  void dispose() {
+    _amplitudeSubscription.cancel();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Recorder')),
+      appBar: AppBar(
+        title: Text('Recorder'),
+      ),
       body: Center(
-        child: ElevatedButton(
-          onPressed: _toggleRecording,
-          child: Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
-        ),
+        child: Text('Amplitude: ${_amplitudeHistory.last}'),
       ),
     );
   }

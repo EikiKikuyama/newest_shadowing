@@ -14,7 +14,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Recorder App',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const RecorderScreen(), // 録音画面を最初に表示
+      home: RecorderScreen(), // 録音画面を最初に表示
       routes: {
         '/recordings': (context) => const RecordingsListScreen(), // 録音リスト画面
       },

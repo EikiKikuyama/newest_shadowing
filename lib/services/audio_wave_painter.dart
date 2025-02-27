@@ -2,38 +2,46 @@ import 'package:flutter/material.dart';
 
 class AudioWavePainter extends CustomPainter {
   final List<double> amplitudes;
-  final double maxAmplitude;
+  final double heightFactor;
 
-  AudioWavePainter(this.amplitudes, {this.maxAmplitude = 100.0});
+  AudioWavePainter({this.amplitudes = const [], this.heightFactor = 1.0});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
+    if (amplitudes.isEmpty) {
+      print("⚠️ 空の波形データなので描画をスキップ");
+      return;
+    }
+
+    final Paint paint = Paint()
       ..color = Colors.blue
       ..strokeWidth = 2.0
       ..style = PaintingStyle.stroke;
 
-    final path = Path();
-    double centerY = size.height / 2;
+    final double baseline = size.height; // 波形の基準を下にする
+    final double widthStep = size.width / amplitudes.length;
 
-    if (amplitudes.isEmpty) return;
-
-    double scaleFactor = size.height / (maxAmplitude * 2); // 振幅をスケール
-
+    final Path path = Path();
     for (int i = 0; i < amplitudes.length; i++) {
-      double x = (i / (amplitudes.length - 1)) * size.width;
-      double y = centerY - amplitudes[i] * scaleFactor; // Y座標のスケール適用
+      final double normalized =
+          (amplitudes[i].abs() * heightFactor) * size.height;
 
-      if (i == 0) {
-        path.moveTo(x, y);
-      } else {
-        path.lineTo(x, y);
+      if (normalized.isNaN || normalized.isInfinite) {
+        print(
+            "⚠️ 無効な値が検出されました: amplitudes[$i] = ${amplitudes[i]}, normalized = $normalized");
+        continue;
       }
+
+      final double x = i * widthStep;
+      final double y = baseline - normalized; // 下から描画（下半分を削除）
+
+      path.moveTo(x.clamp(0, size.width), baseline);
+      path.lineTo(x.clamp(0, size.width), y.clamp(0, size.height));
     }
 
     canvas.drawPath(path, paint);
   }
 
   @override
-  bool shouldRepaint(CustomPainter oldDelegate) => true;
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }

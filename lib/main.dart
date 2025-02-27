@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'screens/recorder_screen.dart';
-import 'screens/recordings_list_screen.dart';
+import 'screens/audio_waveform_screen.dart';
 
 void main() {
   runApp(const MyApp());
@@ -14,10 +13,29 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Recorder App',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: RecorderScreen(), // 録音画面を最初に表示
+      home: HomeScreen(),
       routes: {
-        '/recordings': (context) => const RecordingsListScreen(), // 録音リスト画面
+        '/waveform': (context) => AudioWaveformScreen(),
       },
+    );
+  }
+}
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text("ホーム")),
+      body: Center(
+        child: ElevatedButton(
+          onPressed: () {
+            Navigator.pushNamed(context, '/waveform');
+          },
+          child: Text("📊 波形表示画面へ"),
+        ),
+      ),
     );
   }
 }

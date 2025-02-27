@@ -23,6 +23,9 @@ class RecordingsListScreenState extends State<RecordingsListScreen> {
 
   Future<void> _loadRecordings() async {
     final recordings = await _fileStorageService.loadRecordings();
+
+    if (!mounted) return; // 🎯 context が有効か確認
+
     setState(() {
       _recordings = recordings;
     });
@@ -30,11 +33,39 @@ class RecordingsListScreenState extends State<RecordingsListScreen> {
 
   void _deleteRecording(String filePath) async {
     await _fileStorageService.deleteRecording(filePath);
-    _loadRecordings();
+
+    if (!mounted) return; // 🎯 context が有効か確認
+
+    setState(() {
+      _recordings.removeWhere((recording) => recording.filePath == filePath);
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('録音を削除しました')),
+    );
   }
 
   void _playRecording(String filePath) async {
-    await _audioPlayer.play(DeviceFileSource(filePath)); // 🎯 再生処理
+    try {
+      await _audioPlayer.stop();
+      await _audioPlayer.play(DeviceFileSource(filePath));
+
+      if (!mounted) return; // 🎯 画面がまだ有効か確認
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('再生を開始しました')),
+      );
+    } catch (e) {
+      if (!mounted) return; // 🎯 画面がまだ有効か確認
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('再生エラー: $e')),
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _audioPlayer.dispose(); // 🎯 リソース解放
+    super.dispose();
   }
 
   @override
@@ -48,10 +79,18 @@ class RecordingsListScreenState extends State<RecordingsListScreen> {
           return ListTile(
             title: Text('録音 ${index + 1}'),
             subtitle: Text(recording.createdAt.toString()),
-            onTap: () => _playRecording(recording.filePath), // 🎯 追加（タップで再生）
-            trailing: IconButton(
-              icon: const Icon(Icons.delete),
-              onPressed: () => _deleteRecording(recording.filePath),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.play_arrow), // 🎯 再生ボタン
+                  onPressed: () => _playRecording(recording.filePath),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete),
+                  onPressed: () => _deleteRecording(recording.filePath),
+                ),
+              ],
             ),
           );
         },

@@ -5,12 +5,13 @@ import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 
 class AudioRecorderService {
-  final Record _recorder = Record();
+  final AudioRecorder _recorder = AudioRecorder();
   final StreamController<double> _amplitudeController =
       StreamController<double>.broadcast();
   String? _filePath;
-  String? recordedFilePath; // ✅ 追加: 録音ファイルのパスを保存
-  bool isRecording = false; // ✅ 追加: 録音状態の管理
+  String? recordedFilePath;
+  bool isRecording = false;
+  StreamSubscription<RecordState>? _stateSubscription;
   StreamSubscription<Amplitude>? _amplitudeSubscription;
 
   /// **📊 振幅データのストリームを取得**
@@ -33,27 +34,49 @@ class AudioRecorderService {
       _filePath =
           "${recordingsDir.path}/recording_${DateTime.now().millisecondsSinceEpoch}.m4a";
 
-      await _recorder.start(
+      log("🎤 録音開始準備: $_filePath");
+
+      // ✅ 録音開始を非同期処理にして UI をブロックしない
+      _recorder
+          .start(
         RecordConfig(encoder: AudioEncoder.aacLc),
         path: _filePath!,
-      );
+      )
+          .then((_) {
+        log("🎤 録音開始: $_filePath");
+        isRecording = true;
+        recordedFilePath = null;
 
-      log("🎤 録音開始: $_filePath");
+        // ✅ `onStateChanged` で録音の状態を監視
+        _stateSubscription?.cancel();
+        _stateSubscription = _recorder.onStateChanged().listen((state) {
+          if (state == RecordState.record) {
+            log("🎤 録音中...");
+          }
+        });
 
-      // ✅ `setState()` で録音中の状態を更新
-      isRecording = true;
-      recordedFilePath = null;
+        // ✅ `onAmplitudeChanged()` の修正（非同期で処理）
+        Future.delayed(const Duration(milliseconds: 500), () {
+          _amplitudeSubscription?.cancel();
+          _amplitudeSubscription = _recorder
+              .onAmplitudeChanged(const Duration(milliseconds: 100))
+              .listen((event) {
+            double amplitude = event.current;
 
-      // ✅ `onProgress` を使用して振幅データを取得
-      _amplitudeSubscription?.cancel();
-      _amplitudeSubscription = _recorder.onProgress!.listen((event) {
-        if (event != null) {
-          double amplitude = event.decibels ?? -60.0; // dB値を取得（-60が無音）
-          _amplitudeController.add(amplitude);
-        }
+            // 🎯 負の値を正規化（0-1の範囲に変換）
+            double normalizedAmplitude = (amplitude + 160) / 160;
+
+            log("📊 振幅データ受信: ${event.current} → 正規化: $normalizedAmplitude");
+            _amplitudeController.add(normalizedAmplitude);
+          }, onError: (e) {
+            log("❌ 振幅データエラー: $e");
+          });
+        });
+      }).catchError((e) {
+        log("❌ 録音開始エラー: $e");
       });
     } catch (e) {
-      log("❌ 録音開始エラー: $e");
+      log("❌ 録音開始エラー（try-catch）: $e");
     }
   }
 
@@ -63,13 +86,14 @@ class AudioRecorderService {
       String? filePath = await _recorder.stop();
       log("🎤 録音停止: $filePath");
 
-      // ✅ `setState()` で録音終了を更新
       isRecording = false;
       if (filePath != null) {
-        recordedFilePath = filePath; // ✅ 取得したファイルパスを保存
+        recordedFilePath = filePath;
       }
 
       // ✅ ストリーム購読解除
+      await _stateSubscription?.cancel();
+      _stateSubscription = null;
       await _amplitudeSubscription?.cancel();
       _amplitudeSubscription = null;
     } catch (e) {
@@ -79,6 +103,7 @@ class AudioRecorderService {
 
   /// **🎤 ストリームを閉じる**
   void dispose() {
+    _stateSubscription?.cancel();
     _amplitudeSubscription?.cancel();
     _amplitudeController.close();
   }

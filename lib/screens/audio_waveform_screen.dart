@@ -1,9 +1,9 @@
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:newest_shadowing_app/services/audio_wave_painter.dart';
-import 'package:path_provider/path_provider.dart';
+import 'dart:math';
+import '../services/audio_player_service.dart';
 
 class AudioWaveformScreen extends StatefulWidget {
   const AudioWaveformScreen({super.key});
@@ -13,182 +13,166 @@ class AudioWaveformScreen extends StatefulWidget {
 }
 
 class AudioWaveformScreenState extends State<AudioWaveformScreen> {
-  List<double> fullWaveform = []; // 🎯 全体の波形データ
-  List<double> currentWaveform = []; // 🎯 表示する波形データ
+  List<double> fullWaveform = [];
+  List<double> currentWaveform = [];
+  double maxAmplitude = 1.5;
   final AudioPlayer _audioPlayer = AudioPlayer();
   bool isPlaying = false;
   String? filePath;
-  Duration currentPosition = Duration.zero; // 🎯 再生位置
-
+  Duration currentPosition = Duration.zero;
+  Duration totalDuration = Duration.zero;
+  DateTime? lastUpdateTime;
+  int displayDurationMs = 10000;
+  double progress = 0.0;
   @override
   void initState() {
     super.initState();
     _loadAudio();
-
-    // 🎵 再生位置を監視して波形をリアルタイム更新
     _audioPlayer.onPositionChanged.listen((Duration position) {
-      setState(() {
-        currentPosition = position;
-        _updateWaveform();
-      });
+      if (lastUpdateTime == null ||
+          DateTime.now().difference(lastUpdateTime!) >
+              Duration(milliseconds: 1000)) {
+        if (mounted) {
+          setState(() {
+            currentPosition = position;
+            _updateWaveform();
+          });
+        }
+        lastUpdateTime = DateTime.now();
+      }
     });
 
-    // 🎯 duration を事前に取得
-    Future.delayed(Duration(milliseconds: 500), () async {
-      Duration? audioDuration = await _audioPlayer.getDuration();
-      if (audioDuration != null) {
+    _audioPlayer.onDurationChanged.listen((Duration duration) {
+      if (mounted) {
         setState(() {
-          print("🎵 [initState] 音声の長さを取得: ${audioDuration.inMilliseconds} ms");
+          totalDuration = duration;
         });
-      } else {
-        print("⚠️ [initState] duration の取得に失敗しました。");
       }
     });
   }
 
-  /// **📂 アセットから音声ファイルをコピー**
-  Future<String> copyAssetToFile(String assetPath) async {
-    try {
-      final ByteData data = await rootBundle.load("assets/$assetPath");
-      final Directory tempDir = await getTemporaryDirectory();
-      final File file = File("${tempDir.path}/$assetPath");
-
-      await file.writeAsBytes(data.buffer.asUint8List(), flush: true);
-      return file.path;
-    } catch (e) {
-      print("⚠️ ファイルコピーに失敗しました: $e");
-      return "";
-    }
-  }
-
-  /// **🎵 音声ファイルをロードし波形データを取得**
   Future<void> _loadAudio() async {
-    setState(() {
-      fullWaveform = [];
-      currentWaveform = [];
-    });
+    filePath = await AudioPlayerService().copyAssetToFile("mount_fuji.mp3");
+    if (filePath == null || filePath!.isEmpty) return;
 
-    final String copiedFilePath = await copyAssetToFile("mount_fuji.mp3");
-    if (copiedFilePath.isEmpty) {
-      print("⚠️ 音声ファイルのコピーに失敗しました");
-      return;
+    fullWaveform = await compute(extractWaveform, File(filePath!));
+
+    // ✅ 波形データをスムージング
+    if (fullWaveform.isNotEmpty) {
+      fullWaveform = _processWaveform(fullWaveform);
     }
 
-    setState(() {
-      filePath = copiedFilePath;
-    });
+    maxAmplitude = fullWaveform.reduce(max) * 1.5;
 
-    fullWaveform = await extractWaveform(File(filePath!));
-
-    setState(() {
-      currentWaveform = List.filled(50, 0.0); // 🎯 初期の波形
-    });
-
-    print("🎵 fullWaveform の長さ: ${fullWaveform.length}");
+    if (mounted) {
+      setState(() {
+        currentWaveform = fullWaveform;
+      });
+    }
   }
 
-  /// **📊 波形データを抽出**
-  Future<List<double>> extractWaveform(File file) async {
-    print("📊 extractWaveform() が呼ばれた！ 読み込むファイル: ${file.path}");
-
+  static List<double> extractWaveform(File file) {
     final List<double> amplitudes = [];
+    final Uint8List data = file.readAsBytesSync();
+    int step = 50; // ✅ 解像度を上げる（100バイトごとにサンプリング）
 
-    try {
-      final Uint8List data = await file.readAsBytes();
-      print("✅ ファイル読み込み成功！ データサイズ: ${data.length}");
-
-      int step = (data.length ~/ 500).clamp(1, 10); // 🎯 分割数を調整
-
-      for (int i = 0; i < data.length; i += step) {
-        double normalizedValue = (data[i] / 255.0); // 🎯 0.0 〜 1.0 に正規化
-        amplitudes.add(normalizedValue);
-      }
-
-      print("📊 取得した波形データのサンプル: ${amplitudes.take(10).toList()}");
-    } catch (e) {
-      print("⚠️ 波形データの解析に失敗しました: $e");
-      return [];
+    for (int i = 0; i < data.length - 1; i += step) {
+      int sample = (data[i] | (data[i + 1] << 8)).toSigned(16);
+      amplitudes.add(sample.toDouble());
     }
 
     return amplitudes;
   }
 
-  /// **🔄 現在の再生位置に合わせて波形を更新**
-  Future<void> _updateWaveform() async {
-    if (fullWaveform.isEmpty) {
-      print("⚠️ _updateWaveform() がスキップされました: fullWaveform が空");
-      return;
+  List<double> _processWaveform(List<double> waveform) {
+    if (waveform.isEmpty) return [];
+
+    // ✅ マイナス値を削除し、すべて0以上に
+    List<double> processed =
+        waveform.map((value) => max(0, value).toDouble()).toList();
+
+    int numSamplesPerSecond = 30;
+    int windowSize = (processed.length / numSamplesPerSecond).floor();
+
+    if (windowSize <= 0) {
+      print("⚠️ データが少なすぎるため処理をスキップ");
+      return processed;
     }
 
-    Duration? audioDuration = await _audioPlayer.getDuration();
-    if (audioDuration == null) {
-      print("⚠️ _updateWaveform() がスキップされました: duration がまだ取得できていません");
-      return;
+    List<double> smoothedWaveform = [];
+
+    // ✅ 移動平均フィルター（波形を滑らかに）
+    for (int i = 0; i < processed.length - windowSize; i++) {
+      double avg =
+          processed.sublist(i, i + windowSize).reduce((a, b) => a + b) /
+              windowSize;
+      smoothedWaveform.add(avg);
     }
 
-    final int totalSamples = fullWaveform.length;
-    final int totalDurationMs = audioDuration.inMilliseconds;
-    final int currentMs = currentPosition.inMilliseconds;
-
-    if (totalDurationMs == 0) {
-      print("⚠️ duration が 0 なので波形を更新できません");
-      return;
-    }
-
-    // 🎯 波形の更新頻度（50msごと）
-    const int updateIntervalMs = 50;
-    final int numSamplesPerUpdate =
-        (totalSamples / (totalDurationMs / updateIntervalMs)).toInt();
-
-    final int startIndex = (currentMs / totalDurationMs * totalSamples)
-        .clamp(0, totalSamples - numSamplesPerUpdate)
-        .toInt();
-    final int endIndex =
-        (startIndex + numSamplesPerUpdate).clamp(0, totalSamples);
-
-    print(
-        "🔄 波形更新: startIndex=$startIndex, endIndex=$endIndex, totalSamples=$totalSamples");
-
-    setState(() {
-      currentWaveform = fullWaveform.sublist(startIndex, endIndex);
-    });
+    return smoothedWaveform.map((e) => e / 10).toList();
   }
 
-  /// **🎵 音声を再生・停止**
+  List<double> smoothWaveform(List<double> input, {int windowSize = 5}) {
+    List<double> output = List.filled(input.length, 0);
+    for (int i = 0; i < input.length; i++) {
+      int start = (i - windowSize).clamp(0, input.length - 1);
+      int end = (i + windowSize).clamp(0, input.length - 1);
+      output[i] = input.sublist(start, end + 1).reduce((a, b) => a + b) /
+          (end - start + 1);
+    }
+    return output;
+  }
+
   void _toggleAudio() async {
     if (isPlaying) {
       await _audioPlayer.pause();
     } else {
-      if (filePath == null) {
-        print("⚠️ ファイルがロードされていません");
-        return;
-      }
+      if (filePath == null) return;
+      await _audioPlayer.setSourceDeviceFile(filePath!);
+      await _audioPlayer.resume();
+    }
+    if (mounted) {
+      setState(() {
+        isPlaying = !isPlaying;
+      });
+    }
+  }
 
-      try {
-        await _audioPlayer.setSourceDeviceFile(filePath!);
-        await _audioPlayer.resume();
+  void _updateWaveform() {
+    if (fullWaveform.isEmpty || totalDuration.inMilliseconds == 0) return;
 
-        // 🎯 duration の取得を確実に行うために 500ms 待機
-        await Future.delayed(Duration(milliseconds: 500));
-        Duration? audioDuration = await _audioPlayer.getDuration();
+    int totalSamples = fullWaveform.length;
+    int totalDurationMs = totalDuration.inMilliseconds;
+    int currentMs = currentPosition.inMilliseconds;
 
-        if (audioDuration != null) {
-          setState(() {
-            print("🎵 音声の長さを取得: ${audioDuration.inMilliseconds} ms");
-          });
-        } else {
-          print("⚠️ duration の取得に失敗しました。");
-        }
+    // ✅ オフセット (-3000, +3000) を削除し、正確な範囲を計算
+    // 🎯 描画範囲をもっと広げる
+    int startIndex = (currentMs / totalDurationMs * totalSamples)
+        .clamp(0, totalSamples - 1)
+        .toInt();
+    int endIndex = ((currentMs + 5000) / totalDurationMs * totalSamples)
+        .clamp(0, totalSamples)
+        .toInt();
 
-        print("🎵 音声再生成功");
-      } catch (e) {
-        print("⚠️ 音声再生エラー: $e");
-      }
+    List<double> newWaveform = fullWaveform.sublist(startIndex, endIndex);
+    double newProgress = currentMs / totalDurationMs;
+
+    // ✅ 更新間隔を 100ms に短縮
+    if (DateTime.now()
+            .difference(lastUpdateTime ?? DateTime(0))
+            .inMilliseconds <
+        100) {
+      return;
     }
 
-    setState(() {
-      isPlaying = !isPlaying;
-    });
+    lastUpdateTime = DateTime.now();
+
+    if (mounted) {
+      setState(() {
+        currentWaveform = newWaveform;
+        progress = newProgress;
+      });
+    }
   }
 
   @override
@@ -202,13 +186,14 @@ class AudioWaveformScreenState extends State<AudioWaveformScreen> {
             child: Text(isPlaying ? "停止" : "再生"),
           ),
           SizedBox(
-            height: 120,
+            height: 280,
             width: double.infinity,
             child: CustomPaint(
-              size: Size.fromHeight(100),
-              painter: AudioWavePainter(
+              painter: LineWavePainter(
                 amplitudes: currentWaveform,
-                heightFactor: 1.0,
+                maxAmplitude: maxAmplitude,
+                progress: currentPosition.inMilliseconds /
+                    totalDuration.inMilliseconds, // ✅ 修正後
               ),
             ),
           ),
@@ -216,4 +201,91 @@ class AudioWaveformScreenState extends State<AudioWaveformScreen> {
       ),
     );
   }
+}
+
+class LineWavePainter extends CustomPainter {
+  final List<double> amplitudes;
+  final double maxAmplitude;
+  final double progress; // 進行度（0.0 - 1.0）
+
+  LineWavePainter({
+    required this.amplitudes,
+    required this.maxAmplitude,
+    required this.progress,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (amplitudes.isEmpty || maxAmplitude <= 0 || maxAmplitude.isNaN) return;
+
+    final Paint pastWavePaint = Paint()
+      ..color = Colors.blue
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
+    final Paint redLinePaint = Paint()
+      ..color = Colors.red
+      ..strokeWidth = 2.5;
+
+    final Paint futureWavePaint = Paint()
+      ..color = Colors.grey
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
+
+    double centerX = size.width / 2;
+    double scrollOffset = progress * size.width;
+
+    Path pastPath = Path();
+    Path futurePath = Path();
+
+    bool hasPastPathStarted = false;
+    bool hasFuturePathStarted = false;
+
+    for (int i = 0; i < amplitudes.length - 1; i++) {
+      double x1 = centerX +
+          ((i - amplitudes.length / 2) / amplitudes.length) * size.width -
+          scrollOffset;
+      double y1 = size.height / 2 -
+          ((amplitudes[i] / maxAmplitude) * size.height * 0.6);
+      double x2 = centerX +
+          (((i + 1) - amplitudes.length / 2) / amplitudes.length) * size.width -
+          scrollOffset;
+      double y2 = size.height / 2 -
+          ((amplitudes[i + 1] / maxAmplitude) * size.height * 0.6);
+
+      if (y1.isNaN || y1.isInfinite || y2.isNaN || y2.isInfinite) continue;
+
+      if (x1 < centerX) {
+        // 過去の波形（青）
+        if (!hasPastPathStarted) {
+          pastPath.moveTo(x1, y1);
+          hasPastPathStarted = true;
+        }
+        pastPath.lineTo(x2, y2);
+      } else {
+        // 未来の波形（グレー）
+        if (!hasFuturePathStarted) {
+          futurePath.moveTo(x1, y1);
+          hasFuturePathStarted = true;
+        }
+        futurePath.lineTo(x2, y2);
+      }
+    }
+
+    // 過去の波形を描画（青）
+    canvas.drawPath(pastPath, pastWavePaint);
+
+    // 未来の波形を描画（グレー）
+    canvas.drawPath(futurePath, futureWavePaint);
+
+    // 再生位置を示す赤いライン
+    canvas.drawLine(
+      Offset(centerX, 0),
+      Offset(centerX, size.height),
+      redLinePaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(LineWavePainter oldDelegate) => true;
 }

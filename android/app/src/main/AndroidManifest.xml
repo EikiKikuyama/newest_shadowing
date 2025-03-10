@@ -3,6 +3,8 @@
         android:label="newest_shadowing_app"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <meta-data android:name="flutter.renderer" android:value="opengl" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
